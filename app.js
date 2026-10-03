@@ -66,6 +66,8 @@
   function niceError(e) {
     const m = (e && (e.message || e.error_description || e.msg)) || String(e || 'Something went wrong');
     if (/Invalid login credentials/i.test(m)) return 'Wrong mobile number or password.';
+    if (/Invalid path specified|requested path is invalid|no Route matched/i.test(m)) return 'The Project URL in config.js is not right. It should look exactly like https://abcdefgh.supabase.co — nothing after .co';
+    if (/Invalid API key|No API key/i.test(m)) return 'The key in config.js is not right. Copy the publishable (or anon) key again from Supabase → Project Settings → API Keys.';
     if (/already registered|already been registered/i.test(m)) return 'This mobile number already has a login — sign in instead.';
     if (/Password should be/i.test(m)) return 'Password must be at least 6 characters.';
     if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return 'No internet connection — please try again.';
@@ -120,7 +122,11 @@
     document.title = C.APP_NAME || 'Family Vault';
     if (!window.supabase || !D) return renderPlain('<h2>Could not start</h2><p>The app could not load its parts. Check the internet connection and reload.</p>');
     if (configMissing()) return renderPlain(`<h2>One more step</h2><p>Open <b>config.js</b> on GitHub and paste in your Supabase Project URL, the anon/publishable key and your Gmail address, then reload this page.</p>`);
-    S.sb = window.supabase.createClient(C.SUPABASE_URL, C.SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true } });
+    // Accept the URL however it was copied: with /rest/v1 on the end, a trailing slash, spaces, or no https://
+    let url = String(C.SUPABASE_URL).trim();
+    if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+    try { url = new URL(url).origin; } catch { return renderPlain('<h2>Project URL looks wrong</h2><p>Open <b>config.js</b> and check SUPABASE_URL. It should look like <code>https://abcdefgh.supabase.co</code></p>'); }
+    S.sb = window.supabase.createClient(url, String(C.SUPABASE_KEY).trim(), { auth: { persistSession: true, autoRefreshToken: true } });
     const { data } = await S.sb.auth.getSession();
     if (data.session) { S.user = data.session.user; await afterLogin(); }
     else renderLogin();
