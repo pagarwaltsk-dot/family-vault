@@ -401,15 +401,32 @@
         <dt>Belongs to</dt><dd>${esc(m ? m.name : '—')}</dd>
         <dt>Kind</dt><dd>${esc(d.doc_type || '—')}</dd>
         ${d.id_number ? `<dt>Number</dt><dd>${esc(d.id_number)}</dd>` : ''}
+        ${d.doc_date ? `<dt>Date on document</dt><dd>${fmtDate(d.doc_date)}</dd>` : ''}
         ${d.expiry_date ? `<dt>Valid till</dt><dd>${fmtDate(d.expiry_date)} ${expiryBadge(d.expiry_date)}</dd>` : ''}
         <dt>Who can see it</dt><dd>${d.is_private ? `Private — only ${esc(m ? m.name : 'the person it belongs to')} and whoever uploaded it` : 'Everyone in the family'}</dd>
         <dt>Added</dt><dd>${fmtDate(d.created_at)}${uploader ? ' by ' + esc(uploader.display_name) : ''}</dd>
         <dt>File</dt><dd>${esc(d.file_name || '')} · ${fmtSize(d.size_bytes)}</dd>
       </dl>
+      <div id="series"></div>
       <div id="sentLog"></div>
       ${d.text_content ? `<details class="textbox"><summary>Text read from this document</summary><pre>${esc(d.text_content)}</pre></details>` : '<p class="muted">No text could be read from this file, so it is found only by its name.</p>'}
     `);
     loadSentLog(d.id);
+    loadSeries(d);
+  }
+  // Bills, receipts and policies that share a number belong together:
+  // a LIC policy and all its premium receipts, every electricity bill of one meter, every bill from one supplier
+  const SERIES_WORD = { 'Electricity Bill': 'consumer number', 'Premium Receipt': 'policy number', 'Recharge': 'mobile number', 'Phone Bill': 'mobile number',
+    'Invoice': 'supplier (GSTIN)', 'Freight Bill': 'transporter (GSTIN)' };
+  async function loadSeries(d) {
+    if (!d.id_number) return;
+    const { data } = await S.sb.from('fv_documents').select('id,title,doc_type,doc_date,created_at').eq('id_number', d.id_number).neq('id', d.id);
+    const box = $('#series');
+    if (!box || !data || !data.length) return;
+    const what = SERIES_WORD[d.doc_type] || (/Insurance/.test(d.doc_type || '') ? 'policy number' : 'number');
+    const list = data.sort((a, b) => String(b.doc_date || b.created_at).localeCompare(String(a.doc_date || a.created_at)));
+    box.innerHTML = `<div class="card list-tight"><p class="muted small" style="margin:10px 0 4px">${list.length} more with the same ${esc(what)} (${esc(d.id_number)})</p>
+      ${list.map(x => `<button class="exp-row" data-act="openDoc" data-id="${x.id}"><span>${esc(x.title)}</span><span class="muted small">${x.doc_date ? fmtDate(x.doc_date) : ''}</span></button>`).join('')}</div>`;
   }
   async function loadSentLog(id) {
     const { data } = await S.sb.from('fv_shares').select('*').eq('doc_id', id).order('created_at');
@@ -586,6 +603,7 @@
         <label>Belongs to<select name="member_id"><option value="">— Nobody in particular —</option>${S.members.map(m => `<option value="${m.id}" ${m.id === d.member_id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</select></label>
         <label>Kind of document<select name="doc_type"><option value="">—</option>${typeOptions(d.doc_type || '', d.doc_type)}</select></label>
         <label>Number on the document<input name="id_number" value="${esc(d.id_number || '')}"></label>
+        <label>Date on document (for bills &amp; receipts)<input type="date" name="doc_date" value="${esc(d.doc_date || '')}"></label>
         <label>Valid till (optional)<input type="date" name="expiry_date" value="${esc(d.expiry_date || '')}"></label>
         <label class="check"><input type="checkbox" name="is_private" ${d.is_private ? 'checked' : ''}> <span><b>Private</b> — only the person it belongs to (and whoever uploaded it) can see it</span></label>
         <button class="btn primary big">Save changes</button>
@@ -603,7 +621,7 @@
       const f = e.target;
       const row = {
         title: f.title.value.trim(), member_id: f.member_id.value || null, doc_type: f.doc_type.value || null,
-        id_number: f.id_number.value.trim() || null, expiry_date: f.expiry_date.value || null, is_private: f.is_private.checked
+        id_number: f.id_number.value.trim() || null, expiry_date: f.expiry_date.value || null, doc_date: f.doc_date.value || null, is_private: f.is_private.checked
       };
       if (row.is_private && !row.member_id) return toast('Pick who this private document belongs to.', true);
       const { error } = await S.sb.from('fv_documents').update(row).eq('id', id);
@@ -697,7 +715,7 @@
     // 1. exact copy inside this same selection?
     if (bySha.has(it.sha)) {
       const first = bySha.get(it.sha);
-      Object.assign(it, { status: 'ready', include: false, title: first.title, memberSel: first.memberSel, docType: first.docType, thumbUrl: first.thumbUrl, thumbBlob: first.thumbBlob, text: first.text, idNumber: first.idNumber, expiry: first.expiry });
+      Object.assign(it, { status: 'ready', include: false, title: first.title, memberSel: first.memberSel, docType: first.docType, thumbUrl: first.thumbUrl, thumbBlob: first.thumbBlob, text: first.text, idNumber: first.idNumber, expiry: first.expiry, docDate: first.docDate });
       it.dup = { kind: 'copy', of: first.uid, text: `Exact copy of “${first.name}” in this selection` };
       return;
     }
@@ -721,7 +739,7 @@
     const r = D.analyse(it.text, it.name, S.members);
     it.analysis = r;
     it.docType = r.docType || (ex.isPhoto ? 'Photo' : '');
-    it.idNumber = r.idNumber; it.expiry = r.expiry;
+    it.idNumber = r.idNumber; it.expiry = r.expiry; it.docDate = r.docDate || '';
     it.memberSel = r.member ? r.member.id : (r.guessedName ? 'new:' + r.guessedName : '');
     it.base = baseTitle(r);
     it.title = r.title || (ex.isPhoto ? 'Photo ' + fmtDate(new Date(it.file.lastModified).toISOString()) : '') || `Document ${B.items.indexOf(it) + 1}`;
@@ -731,6 +749,8 @@
     if (!it.dup) {
       for (const o of B.items) {
         if (o === it || o.status !== 'ready' || o.dup) continue;
+        const dateClash = it.docDate && o.docDate && it.docDate !== o.docDate;   // e.g. July's bill vs August's bill
+        if (dateClash) continue;
         const sameNo = it.idNumber && o.idNumber === it.idNumber && o.docType === it.docType;
         const sim = it.docType && o.docType === it.docType ? D.similarity(it.text, o.text) : 0;
         if (sameNo || sim >= 0.75) {
@@ -740,7 +760,7 @@
       }
     }
     if (!it.dup && (it.idNumber || lettersIn(it.text) >= 60)) {
-      const { data: sim } = await S.sb.rpc('fv_find_similar', { p_text: (it.text || '').slice(0, 3000), p_id_number: it.idNumber || null, p_doc_type: it.docType || null });
+      const { data: sim } = await S.sb.rpc('fv_find_similar', { p_text: (it.text || '').slice(0, 3000), p_id_number: it.idNumber || null, p_doc_type: it.docType || null, p_doc_date: it.docDate || null });
       if (sim && sim.length) {
         const s = sim[0];
         it.dup = { kind: 'similar-saved', ids: sim.map(x => x.id), text: s.reason === 'same number'
@@ -910,6 +930,7 @@
           <select data-f="docType" class="select-sm"><option value="">Kind…</option>${typeOptions(it.docType, it.docType)}</select>
           <label class="mini-check"><input type="checkbox" data-f="isPrivate" ${it.isPrivate ? 'checked' : ''}> ${ICON.lock}Private</label>
         </div>
+        ${it.docDate || D.RECURRING_TYPES.includes(it.docType) ? `<label class="mini">Date on document <input type="date" data-f="docDate" value="${esc(it.docDate || '')}"></label>` : ''}
         ${it.expiry || (it.analysis && /Passport|Licence|Insurance|PUC|RC|Agreement|Warranty/.test(it.docType)) ? `<label class="mini">Valid till <input type="date" data-f="expiry" value="${esc(it.expiry || '')}"></label>` : ''}`}
         <div class="file-line ellipsis">${esc(it.path)} · ${fmtSize(it.size)}</div>
         ${it.dup ? `<div class="flag amber">${esc(it.dup.text)}</div>${it.dup.ids ? `<div class="dup-thumbs" data-dup="${it.dup.ids.join(',')}"></div>` : ''}` : ''}
@@ -1007,7 +1028,7 @@
           id, title: it.title.trim(), doc_type: it.docType || null, member_id: memberId, is_private: !!it.isPrivate,
           file_path: filePath, thumb_path: thumbPath, file_name: it.name, mime_type: up.type || it.file.type || null,
           size_bytes: up.blob.size, sha256: it.sha, text_content: it.text || null, id_number: it.idNumber || null,
-          expiry_date: it.expiry || null, uploaded_by: S.user.id
+          expiry_date: it.expiry || null, doc_date: it.docDate || null, uploaded_by: S.user.id
         });
         if (e2) { await S.sb.storage.from(BUCKET).remove([filePath, thumbPath].filter(Boolean)); throw e2; }
         it.status = 'saved'; it.error = '';
@@ -1235,6 +1256,11 @@
           </div></div>`).join('')}
         <p class="muted small">Linking a login to a family member lets that person see their own <b>private</b> documents. New family members create their own login from the sign-in screen, then appear here.</p></div>` : ''}
 
+      ${canUpload() ? `<h2 class="h">Document names</h2>
+      <div class="card list-tight">
+        <button class="exp-row" data-act="recheckNames"><span><b>Re-check names</b><br><span class="muted small">Reads saved documents again and suggests better names and kinds. You tick which ones to change.</span></span><span>›</span></button>
+      </div>` : ''}
+
       <h2 class="h">My account</h2>
       <div class="card list-tight">
         <div class="kv"><span>Signed in as</span><b>${esc(S.me.display_name)} · ${esc(S.me.mobile || '')}</b></div>
@@ -1252,6 +1278,62 @@
       <button class="btn big" data-act="signOut">Sign out</button>
       <p class="muted small center">Private documents are visible only to the person they belong to and to whoever uploaded them — not even the admin sees them.</p>`;
   }
+  // ---------- re-check names of saved documents ----------
+  async function recheckNames() {
+    openSheet(`<div class="sheet-head"><h2>Re-check names</h2><button class="icon-btn" data-act="closeSheet">${ICON.close}</button></div><p class="muted">Reading your documents again…</p>`);
+    await loadMembers();
+    const { data, error } = await S.sb.from('fv_documents').select('id,title,doc_type,member_id,file_name,text_content,id_number,expiry_date,doc_date,uploaded_by').order('created_at');
+    if (error) return toast(niceError(error), true);
+    const mine = (data || []).filter(d => isAdmin() || d.uploaded_by === S.user.id);
+    const changes = [];
+    for (const d of mine) {
+      if (!d.text_content && !d.file_name) continue;
+      const r = D.analyse(d.text_content || '', d.file_name, S.members);
+      if (!r.docType && !r.title) continue;
+      // keep the person already chosen unless the document clearly names someone else in the family
+      const memberId = r.member ? r.member.id : d.member_id;
+      const person = memberById(memberId);
+      const base = r.title ? baseTitle(r) : '';
+      const title = r.typeKey === 'invoice' ? r.title : [person ? person.name : '', base || r.docType].filter(Boolean).join(' ');
+      const docType = r.docType || d.doc_type;
+      const c = { id: d.id, oldTitle: d.title, title, oldType: d.doc_type, docType, oldMember: d.member_id, memberId,
+        idNumber: (r.docType && r.docType !== d.doc_type ? r.idNumber : d.id_number) || r.idNumber || null, expiry: d.expiry_date || r.expiry || null,
+        docDate: d.doc_date || r.docDate || null, on: true };
+      if (c.title !== c.oldTitle || c.docType !== c.oldType || c.memberId !== c.oldMember) changes.push(c);
+    }
+    S.recheck = changes;
+    if (!changes.length) {
+      return openSheet(`<div class="sheet-head"><h2>Re-check names</h2><button class="icon-btn" data-act="closeSheet">${ICON.close}</button></div><p>All ${mine.length} documents already have the best names the app can suggest.</p>`);
+    }
+    const mName = id => { const m = memberById(id); return m ? m.name : '—'; };
+    openSheet(`<div class="sheet-head"><h2>${changes.length} better name${changes.length === 1 ? '' : 's'} found</h2><button class="icon-btn" data-act="closeSheet">${ICON.close}</button></div>
+      <p class="muted small">Untick any you named yourself on purpose. You can also edit the new name before applying.</p>
+      <div class="row small-gap"><button class="link" data-act="recheckAll" data-on="1">Tick all</button><button class="link" data-act="recheckAll" data-on="0">Untick all</button></div>
+      <div class="list">${changes.map((c, i) => `
+        <div class="item on" data-rc="${i}">
+          <label class="tick"><input type="checkbox" data-rcf="on" checked></label>
+          <div class="item-body">
+            <div class="muted small"><s>${esc(c.oldTitle)}</s></div>
+            <input class="title-in" data-rcf="title" value="${esc(c.title)}">
+            <div class="muted small">${c.docType !== c.oldType ? `Kind: ${esc(c.oldType || '—')} → <b>${esc(c.docType)}</b>` : esc(c.docType || '')}${c.memberId !== c.oldMember ? ` · Person: ${esc(mName(c.oldMember))} → <b>${esc(mName(c.memberId))}</b>` : ''}</div>
+          </div></div>`).join('')}</div>
+      <button class="btn primary big" data-act="applyRecheck">Apply ticked changes</button>`);
+  }
+  async function applyRecheck(btn) {
+    const list = (S.recheck || []).filter(c => c.on && c.title.trim());
+    if (!list.length) return toast('Nothing ticked.', true);
+    btn.disabled = true;
+    let done = 0, failed = 0;
+    for (const c of list) {
+      const { error } = await S.sb.from('fv_documents').update({ title: c.title.trim(), doc_type: c.docType || null, member_id: c.memberId || null, id_number: c.idNumber, expiry_date: c.expiry, doc_date: c.docDate }).eq('id', c.id);
+      if (error) failed++; else done++;
+      btn.textContent = `Saving ${done + failed} of ${list.length}…`;
+    }
+    closeSheet();
+    toast(failed ? `${done} renamed, ${failed} could not be changed.` : `${done} document${done === 1 ? '' : 's'} renamed`, !!failed);
+    S.recheck = null;
+  }
+
   async function saveUser(userId) {
     const role = $(`[data-user="${userId}"][data-k="role"]`).value;
     const member = $(`[data-user="${userId}"][data-k="member"]`).value || null;
@@ -1364,7 +1446,14 @@
     lockVault, showSecret: el => showSecret(el.dataset.id), editSecret: el => editSecret(el.dataset.id), deleteSecret: el => deleteSecret(el.dataset.id),
     reveal: el => el.classList.toggle('blur'),
     copy: async el => { try { await navigator.clipboard.writeText(el.dataset.v); toast('Copied'); } catch { toast('Could not copy', true); } bumpVaultTimer(); },
-    saveUser: el => saveUser(el.dataset.id), changePassword, mfaOn, mfaOff
+    saveUser: el => saveUser(el.dataset.id), changePassword, mfaOn, mfaOff,
+    recheckNames: () => recheckNames(),
+    applyRecheck: el => applyRecheck(el),
+    recheckAll: el => {
+      const on = el.dataset.on === '1';
+      (S.recheck || []).forEach(c => (c.on = on));
+      $$('[data-rc]').forEach(box => { box.classList.toggle('on', on); box.querySelector('[data-rcf=on]').checked = on; });
+    }
   };
   document.addEventListener('click', e => {
     const el = e.target.closest('[data-act]');
@@ -1373,11 +1462,20 @@
     if (el.dataset.act !== 'closeSheet' && el.closest('#sheet') && ['openDoc'].includes(el.dataset.act)) closeSheet();
     ACT[el.dataset.act](el, e);
   });
+  function onRecheckChange(el) {
+    const box = el.closest('[data-rc]'); if (!box || !S.recheck) return;
+    const c = S.recheck[+box.dataset.rc];
+    if (el.dataset.rcf === 'on') { c.on = el.checked; box.classList.toggle('on', el.checked); } else c.title = el.value;
+  }
   document.addEventListener('change', e => {
+    if (e.target.dataset.rcf) onRecheckChange(e.target);
     if (e.target.dataset.f) onItemChange(e.target);
     if (e.target.dataset.pref) setPref(e.target.dataset.pref, e.target.checked);
   });
-  document.addEventListener('input', e => { if (e.target.dataset.f === 'title') onItemChange(e.target); });
+  document.addEventListener('input', e => {
+    if (e.target.dataset.f === 'title') onItemChange(e.target);
+    if (e.target.dataset.rcf === 'title') onRecheckChange(e.target);
+  });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#sheet').hidden) closeSheet(); });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden && S.vault.key) { clearTimeout(S.vault.timer); S.vault.timer = setTimeout(lockVault, 60 * 1000); }

@@ -78,73 +78,149 @@
     return f ? 'FY ' + f[1] + '-' + f[2].slice(-2) : '';
   }
 
-  // ---------- document types, most specific first ----------
-  // label = how it is named;  expires = has a validity date worth tracking
+  // ---------- document types ----------
+  // Every kind of document is scored, and the best score wins.
+  //   strong = a phrase that names the document (e.g. "BIRTH CERTIFICATE") — 15 points in the
+  //            heading (first lines), 8 further down, plus 4 for each further strong phrase
+  //   weak   = words such documents usually contain — 3 points each, at most 9
+  //   need   = must be present, otherwise this kind is ruled out
+  //   base   = points for a strong phrase when lower than 10 (vague words like "Receipt")
+  //   maxLen = ruled out when the document has more letters than this (ID cards are short)
+  // A kind needs 8 points to be suggested; otherwise the file name is used instead.
+  const R = s => new RegExp(s);
   const TYPES = [
-    { key: 'itr', label: 'ITR', test: T => has(T, /INCOME TAX RETURN|\bITR-?\s?V\b|\bITR ACKNOWLEDGEMENT|INDIAN INCOME TAX RETURN/), extra: assessmentYear, extraAfter: true },
-    { key: 'form16', label: 'Form 16', test: T => has(T, /\bFORM\s*(NO\.?\s*)?16\b/) && has(T, /TAX DEDUCTED|\bTDS\b|DEDUCTOR/), extra: assessmentYear, extraAfter: true },
-    { key: 'gst', label: 'GST Certificate', test: T => has(T, /REG\s?-?\s?06\b/) || has(T, /REGISTRATION CERTIFICATE.{0,60}GOODS AND SERVICES/) },
-    { key: 'udyam', label: 'Udyam Certificate', test: T => has(T, /UDYAM REGISTRATION|UDYAM-[A-Z]{2}-/) },
-    { key: 'fssai', label: 'FSSAI Licence', test: T => has(T, /FSSAI|FOOD SAFETY AND STANDARDS/) && has(T, /LICEN|REGISTRATION/), expires: true },
-    { key: 'trade', label: 'Trade Licence', test: T => has(T, /TRADE LICEN/), expires: true },
-    { key: 'passport', label: 'Passport', test: T => (has(T, /PASSPORT/) && has(T, /REPUBLIC OF INDIA|GOVERNMENT OF INDIA|NATIONALITY/)) || has(T, /P<IND/), expires: true },
-    { key: 'death', label: 'Death Certificate', test: T => has(T, /DEATH CERTIFICATE|CERTIFICATE OF DEATH|DATE OF DEATH|NAME OF (THE )?DECEASED/) },
-    { key: 'birth', label: 'Birth Certificate', test: T => has(T, /BIRTH CERTIFICATE|CERTIFICATE OF BIRTH|REGISTRATION OF BIRTH|BIRTH REGISTRATION|EXTRACT OF BIRTH/) },
-    { key: 'marriage', label: 'Marriage Certificate', test: T => has(T, /MARRIAGE CERTIFICATE|CERTIFICATE OF MARRIAGE|REGISTRATION OF MARRIAGE|MARRIAGE REGISTRATION|SPECIAL MARRIAGE ACT/) },
-    { key: 'admit', label: 'Admit Card', test: T => has(T, /ADMIT CARD|HALL TICKET/), extra: classOf },
-    { key: 'marksheet', label: 'Marksheet', test: T => has(T, /MARKS?\s?-?SHEET|STATEMENT OF MARKS|MARKS STATEMENT|GRADE\s?SHEET|GRADE CARD|REPORT CARD|PROGRESS REPORT|MARKS OBTAINED/), extra: classOf },
-    { key: 'tc', label: 'Transfer Certificate', test: T => has(T, /TRANSFER CERTIFICATE|SCHOOL LEAVING CERTIFICATE|LEAVING CERTIFICATE/) },
-    { key: 'migration', label: 'Migration Certificate', test: T => has(T, /MIGRATION CERTIFICATE/) },
-    { key: 'passcert', label: 'Pass Certificate', test: T => has(T, /PASS CERTIFICATE|PASSING CERTIFICATE|HAS PASSED|PASSED THE/) && has(T, /EXAMINATION|BOARD|COUNCIL|UNIVERSITY/), extra: classOf },
-    { key: 'degree', label: 'Degree Certificate', test: T => has(T, /DEGREE|CONVOCATION|BACHELOR OF|MASTER OF/) && has(T, /UNIVERSITY/), extra: classOf },
-    { key: 'puc', label: 'PUC', test: T => has(T, /POLLUTION UNDER CONTROL|\bPUCC?\b|PUC CERTIFICATE/), expires: true, vehicle: true },
-    { key: 'insurance', label: 'Insurance', test: T => has(T, /INSURANCE|ASSURANCE/) && has(T, /POLICY|PREMIUM|INSURED/), expires: true, sub: insuranceKind },
-    { key: 'rc', label: 'RC', test: T => (has(T, /CERTIFICATE OF REGISTRATION|REGISTRATION CERTIFICATE|\bR\.?C\.?\s?BOOK|REGN\.?\s?(NO|NUMBER)/) && has(T, /CHASSIS|ENGINE|MAKER|VEHICLE|FUEL/)) || (has(T, /CHASSIS/) && has(T, /ENGINE/)), expires: true, vehicle: true },
-    { key: 'dl', label: 'Driving Licence', test: T => has(T, /DRIVING\s?LICEN|LICEN[CS]E TO DRIVE|\bDL\s?NO\b/), expires: true },
-    { key: 'voter', label: 'Voter ID', test: T => has(T, /ELECTION COMMISSION|ELECTOR|\bEPIC\b/) },
-    { key: 'pan', label: 'PAN Card', test: T => has(T, /PERMANENT ACCOUNT NUMBER/) || (has(T, /\b[A-Z]{5}\d{4}[A-Z]\b/) && has(T, /INCOME\s?TAX|GOVT|GOVERNMENT/)) },
-    { key: 'aadhaar', label: 'Aadhaar Card', test: T => has(T, /UNIQUE IDENTIFICATION AUTHORITY/) || (has(T, /AADHAA?R|AADHAR|\bUIDAI\b|ENROLMENT NO|MERA AADHAAR/) && !!aadhaarNo(T)) },
-    { key: 'ration', label: 'Ration Card', test: T => has(T, /RATION CARD|NATIONAL FOOD SECURITY|PUBLIC DISTRIBUTION SYSTEM|\bNFSA\b/) },
-    { key: 'prc', label: 'PRC', test: T => has(T, /PERMANENT RESIDEN(T|CE|TIAL) CERTIFICATE/) },
-    { key: 'income', label: 'Income Certificate', test: T => has(T, /INCOME CERTIFICATE/) },
-    { key: 'ncl', label: 'Non-Creamy Layer Certificate', test: T => has(T, /NON.?CREAMY/) },
-    { key: 'caste', label: 'Caste Certificate', test: T => has(T, /CASTE CERTIFICATE|COMMUNITY CERTIFICATE/) },
-    { key: 'domicile', label: 'Domicile Certificate', test: T => has(T, /DOMICILE/) },
-    { key: 'residence', label: 'Residence Certificate', test: T => has(T, /RESIDEN(CE|TIAL) CERTIFICATE/) },
-    { key: 'vaccine', label: 'Vaccination Certificate', test: T => has(T, /VACCINAT|COWIN|CO-WIN|IMMUNI[SZ]ATION/) },
-    { key: 'discharge', label: 'Discharge Summary', test: T => has(T, /DISCHARGE SUMMARY|DISCHARGE CERTIFICATE/) },
-    { key: 'medical', label: 'Medical Report', test: T => has(T, /PATHOLOG|LABORATORY|LAB REPORT|HA?EMOGLOBIN|BLOOD SUGAR|PRESCRIPTION|\bRX\b|DIAGNOS|RADIOLOG|X-RAY|ULTRASOUND|\bUSG\b|\bMRI\b|CT SCAN/) },
-    { key: 'salary', label: 'Salary Slip', test: T => has(T, /SALARY SLIP|PAY\s?SLIP|SALARY STATEMENT/) },
-    { key: 'fd', label: 'FD Receipt', test: T => has(T, /FIXED DEPOSIT|TERM DEPOSIT|\bFDR\b|DEPOSIT RECEIPT/), bank: true },
-    { key: 'cheque', label: 'Cancelled Cheque', test: T => has(T, /OR BEARER|OR ORDER/) && has(T, /IFSC|BANK|A\/C/), bank: true },
-    { key: 'passbook', label: 'Passbook', test: T => has(T, /PASS\s?BOOK/), bank: true },
-    { key: 'statement', label: 'Bank Statement', test: T => has(T, /STATEMENT OF ACCOUNT|ACCOUNT STATEMENT|BANK STATEMENT/), bank: true },
-    { key: 'electricity', label: 'Electricity Bill', test: T => has(T, /ELECTRICITY|APDCL|ENERGY BILL|UNITS CONSUMED|POWER DISTRIBUTION/) && has(T, /BILL|CONSUMER/) },
-    { key: 'gas', label: 'Gas Connection', test: T => has(T, /\bLPG\b|GAS CONNECTION|INDANE|BHARAT ?GAS|HP ?GAS/) },
-    { key: 'phonebill', label: 'Phone Bill', test: T => has(T, /\bJIO\b|AIRTEL|BSNL|VODAFONE/) && has(T, /BILL/) },
-    { key: 'saledeed', label: 'Sale Deed', test: T => has(T, /SALE DEED|DEED OF SALE|CONVEYANCE DEED/) },
-    { key: 'giftdeed', label: 'Gift Deed', test: T => has(T, /GIFT DEED|DEED OF GIFT/) },
-    { key: 'jamabandi', label: 'Jamabandi', test: T => has(T, /JAMABANDI/) },
-    { key: 'mutation', label: 'Land Mutation', test: T => has(T, /MUTATION/) && has(T, /LAND|DAG|PATTA/) },
-    { key: 'patta', label: 'Land Patta', test: T => has(T, /\bPATTA\b|\bDAG\s?NO/) },
-    { key: 'proptax', label: 'Property Tax Receipt', test: T => has(T, /HOLDING TAX|PROPERTY TAX/) },
-    { key: 'rent', label: 'Rent Agreement', test: T => has(T, /RENT AGREEMENT|LEASE AGREEMENT|LEASE DEED|LEAVE AND LICEN|TENANCY/), expires: true },
-    { key: 'will', label: 'Will', test: T => has(T, /LAST WILL|WILL AND TESTAMENT/) },
-    { key: 'poa', label: 'Power of Attorney', test: T => has(T, /POWER OF ATTORNEY/) },
-    { key: 'affidavit', label: 'Affidavit', test: T => has(T, /AFFIDAVIT/) },
-    { key: 'warranty', label: 'Warranty Card', test: T => has(T, /WARRANTY/), expires: true },
-    { key: 'invoice', label: 'Invoice', test: T => has(T, /TAX INVOICE|BILL OF SUPPLY|INVOICE NO|INVOICE NUMBER|CASH MEMO/) },
-    { key: 'resume', label: 'Resume', test: T => has(T, /CURRICULUM VITAE|\bRESUME\b/) },
-    { key: 'agreement', label: 'Agreement', test: T => has(T, /\bAGREEMENT\b/) },
-    { key: 'receipt', label: 'Receipt', test: T => has(T, /\bRECEIPT\b/) }
+    { key: 'itr', label: 'ITR', strong: [/INDIAN INCOME TAX RETURN/, /\bITR\s?-?\s?V\b/, /ITR ACKNOWLEDGEMENT/, /INCOME TAX RETURN/], weak: [/ASSESSMENT YEAR/, /ACKNOWLEDGEMENT NUMBER/, /E-?FILING/, /\bCPC\b/, /TOTAL INCOME/], extra: assessmentYear, extraAfter: true },
+    { key: 'form16', label: 'Form 16', strong: [/\bFORM\s*(NO\.?\s*)?16\b/], need: /TAX DEDUCTED|\bTDS\b|DEDUCTOR/, weak: [/\bTAN\b/, /DEDUCTOR/, /EMPLOYER/], extra: assessmentYear, extraAfter: true },
+    { key: 'gst', label: 'GST Certificate', strong: [/\bREG\s?-?\s?06\b/, /FORM GST REG/, /REGISTRATION CERTIFICATE.{0,60}GOODS AND SERVICES/], weak: [/GOODS AND SERVICES TAX/, /\bGSTIN\b/, /CONSTITUTION OF BUSINESS/, /PRINCIPAL PLACE/] },
+    { key: 'udyam', label: 'Udyam Certificate', strong: [/UDYAM REGISTRATION/, /UDYAM-[A-Z]{2}-/], weak: [/MSME/, /ENTERPRISE/] },
+    { key: 'fssai', label: 'FSSAI Licence', strong: [/FOOD SAFETY AND STANDARDS AUTHORITY/, /FSSAI.{0,40}(LICEN|REGISTRATION CERTIFICATE)/], weak: [/FOOD BUSINESS/], expires: true },
+    { key: 'trade', label: 'Trade Licence', strong: [/TRADE LICEN/], weak: [/MUNICIPAL/, /VALID/], expires: true },
+    { key: 'passport', label: 'Passport', strong: [/P<IND/, /REPUBLIC OF INDIA.{0,60}PASSPORT|PASSPORT.{0,60}REPUBLIC OF INDIA/], weak: [/PASSPORT NO/, /NATIONALITY/, /PLACE OF ISSUE/, /FILE NO/, /DATE OF EXPIRY/], expires: true },
+    { key: 'death', label: 'Death Certificate', strong: [/DEATH CERTIFICATE/, /CERTIFICATE OF DEATH/], weak: [/DATE OF DEATH/, /DECEASED/, /PLACE OF DEATH/, /CAUSE OF DEATH/] },
+    { key: 'birth', label: 'Birth Certificate', strong: [/BIRTH CERTIFICATE/, /CERTIFICATE OF BIRTH/, /REGISTRATION OF BIRTH/, /BIRTH REGISTRATION/, /EXTRACT OF BIRTH/], weak: [/PLACE OF BIRTH/, /NAME OF (THE )?MOTHER/, /NAME OF (THE )?FATHER/, /BIRTHS AND DEATHS/] },
+    { key: 'marriage', label: 'Marriage Certificate', strong: [/MARRIAGE CERTIFICATE/, /CERTIFICATE OF MARRIAGE/, /REGISTRATION OF MARRIAGE/, /MARRIAGE REGISTRATION/], weak: [/BRIDE/, /BRIDEGROOM/, /SOLEMNI[SZ]ED/, /MARRIAGE ACT/] },
+    { key: 'admit', label: 'Admit Card', strong: [/ADMIT CARD/, /HALL TICKET/], weak: [/ROLL NO/, /EXAMINATION CENT/, /INVIGILATOR/], extra: classOf },
+    { key: 'marksheet', label: 'Marksheet', strong: [/MARKS?\s?-?SHEET/, /STATEMENT OF MARKS/, /MARKS STATEMENT/, /GRADE\s?SHEET/, /GRADE CARD/, /REPORT CARD/, /PROGRESS REPORT/], weak: [/MARKS OBTAINED/, /MAX(IMUM)?\.? MARKS/, /TOTAL MARKS/, /ROLL NO/, /SUBJECTS?/, /RESULT/], extra: classOf },
+    { key: 'tc', label: 'Transfer Certificate', strong: [/TRANSFER CERTIFICATE/, /(?<!HIGH )SCHOOL LEAVING CERTIFICATE(?! EXAM)/], weak: [/ADMISSION NO/, /DATE OF LEAVING/, /CONDUCT/] },
+    { key: 'migration', label: 'Migration Certificate', strong: [/MIGRATION CERTIFICATE/], weak: [/UNIVERSITY|BOARD|COUNCIL/] },
+    { key: 'passcert', label: 'Pass Certificate', strong: [/PASS CERTIFICATE/, /PASSING CERTIFICATE/], weak: [/HAS PASSED|PASSED THE/, /EXAMINATION/, /BOARD|COUNCIL/, /DIVISION/], extra: classOf },
+    { key: 'degree', label: 'Degree Certificate', strong: [/DEGREE CERTIFICATE/, /CONVOCATION/, /CONFERRED/], weak: [/UNIVERSITY/, /BACHELOR OF|MASTER OF/, /DEGREE/], extra: classOf },
+    { key: 'puc', label: 'PUC', strong: [/POLLUTION UNDER CONTROL/, /\bPUCC\b/, /PUC CERTIFICATE/], weak: [/EMISSION/, /\bHC\b|\bCO\b/, /TEST/], expires: true, vehicle: true },
+    { key: 'premium', label: 'Premium Receipt', strong: [/PREMIUM RECEIPT/, /RENEWAL PREMIUM/, /PREMIUM PAID (CERTIFICATE|STATEMENT)/, /RECEIPT.{0,30}PREMIUM/, /PREMIUM (PAYMENT )?ACKNOWLEDGEMENT/], weak: [/POLICY (NO|NUMBER)/, /AMOUNT/, /DUE DATE|NEXT DUE/, /INSURANCE|ASSURANCE/], sub: T => ({ label: 'Premium Receipt', insurer: insuranceKind(T).insurer }), recurring: 'month' },
+    { key: 'insurance', label: 'Insurance', strong: [/CERTIFICATE OF INSURANCE/, /POLICY SCHEDULE|SCHEDULE OF (THE )?POLICY/, /INSURANCE POLICY/, /POLICY DOCUMENT/, /POLICY (CERTIFICATE|BOND)/], weak: [/INSURANCE|ASSURANCE/, /PREMIUM/, /SUM (INSURED|ASSURED)/, /POLICY (NO|NUMBER)/, /INSURED/, /NOMINEE/, /\bIRDAI?\b/], expires: true, sub: insuranceKind },
+    { key: 'rc', label: 'RC', strong: [/CERTIFICATE OF REGISTRATION/, /REGISTRATION CERTIFICATE/, /\bR\.?C\.?\s?BOOK/, /\bFORM\s?(NO\.?\s?)?23\b/], need: /CHASSIS|ENGINE|MAKER|FUEL|VEHICLE CLASS|BODY TYPE|SEATING/, weak: [/CHASSIS/, /ENGINE (NO|NUMBER)/, /MAKER/, /FUEL/, /SEATING/, /UNLADEN/, /VEHICLE CLASS|CLASS OF VEHICLE/], expires: true, vehicle: true },
+    { key: 'dl', label: 'Driving Licence', strong: [/DRIVING\s?LICEN/, /LICEN[CS]E TO DRIVE/], weak: [/\bDL\s?NO/, /\bCOV\b/, /CLASS OF VEHICLE/, /\bNT\b|\bTR\b/, /VALID TILL/, /BLOOD GROUP/], expires: true },
+    { key: 'voter', label: 'Voter ID', strong: [/ELECTION COMMISSION OF INDIA/, /ELECTOR'?S? PHOTO IDENTITY/, /\bEPIC\b/], weak: [/ELECTOR/, /ASSEMBLY CONSTITUENCY/, /PART NO/] },
+    { key: 'pan', label: 'PAN Card', strong: [/PERMANENT ACCOUNT NUMBER CARD/, /INCOME\s?TAX DEPARTMENT/], need: /\b[A-Z]{5}\d{4}[A-Z]\b|PERMANENT ACCOUNT NUMBER CARD/, weak: [/PERMANENT ACCOUNT NUMBER/, /GOVT\.? OF INDIA|GOVERNMENT OF INDIA/, /SIGNATURE/], maxLen: 900 },
+    { key: 'aadhaar', label: 'Aadhaar Card', strong: [/UNIQUE IDENTIFICATION AUTHORITY/, /MERA AADHAAR/, /AAM AADMI KA ADHIKAR/, /ENROL?MENT NO/], need: /[2-9]\d{3}\s?\d{4}\s?\d{4}|UNIQUE IDENTIFICATION AUTHORITY/, weak: [/AADHAA?R|AADHAR/, /\bVID\b/, /GOVERNMENT OF INDIA/, /\bUIDAI\b/, /\bDOB\b|YEAR OF BIRTH/], maxLen: 4000 },
+    { key: 'ration', label: 'Ration Card', strong: [/RATION CARD/, /NATIONAL FOOD SECURITY/, /PUBLIC DISTRIBUTION SYSTEM/], weak: [/\bNFSA\b/, /FAIR PRICE SHOP/, /HEAD OF (THE )?FAMILY/] },
+    { key: 'prc', label: 'PRC', strong: [/PERMANENT RESIDEN(T|CE|TIAL) CERTIFICATE/] },
+    { key: 'income', label: 'Income Certificate', strong: [/INCOME CERTIFICATE/], weak: [/ANNUAL INCOME/] },
+    { key: 'ncl', label: 'Non-Creamy Layer Certificate', strong: [/NON.?CREAMY/] },
+    { key: 'caste', label: 'Caste Certificate', strong: [/CASTE CERTIFICATE/, /COMMUNITY CERTIFICATE/] },
+    { key: 'domicile', label: 'Domicile Certificate', strong: [/DOMICILE CERTIFICATE/, /CERTIFICATE OF DOMICILE/] },
+    { key: 'residence', label: 'Residence Certificate', strong: [/RESIDEN(CE|TIAL) CERTIFICATE/] },
+    { key: 'vaccine', label: 'Vaccination Certificate', strong: [/VACCINATION CERTIFICATE/, /CERTIFICATE FOR COVID/, /\bCO-?WIN\b/, /IMMUNI[SZ]ATION (CARD|RECORD)/], weak: [/VACCINE/, /DOSE/] },
+    { key: 'discharge', label: 'Discharge Summary', strong: [/DISCHARGE SUMMARY/, /DISCHARGE CERTIFICATE/], weak: [/DATE OF ADMISSION/, /DIAGNOSIS/, /TREATING DOCTOR/] },
+    { key: 'medical', label: 'Medical Report', strong: [/LAB(ORATORY)? REPORT/, /TEST REPORT/, /PATHOLOGY/, /PRESCRIPTION/, /RADIOLOGY|ULTRASOUND|X-RAY|\bMRI\b|CT SCAN/], weak: [/HA?EMOGLOBIN/, /REFERENCE (RANGE|INTERVAL)/, /DIAGNOSIS/, /\bMBBS\b|\bM\.D\.?\b/, /SPECIMEN|SAMPLE/, /\bRX\b/, /PATIENT/] },
+    { key: 'salary', label: 'Salary Slip', strong: [/SALARY SLIP/, /PAY\s?SLIP/, /SALARY STATEMENT/], weak: [/BASIC/, /\bHRA\b/, /GROSS/, /NET PAY|NET SALARY/], recurring: 'month' },
+    { key: 'fd', label: 'FD Receipt', strong: [/FIXED DEPOSIT/, /TERM DEPOSIT/, /DEPOSIT RECEIPT/, /\bFDR\b/], weak: [/MATURITY/, /RATE OF INTEREST/, /DEPOSIT/], bank: true },
+    { key: 'cheque', label: 'Cancelled Cheque', strong: [/OR BEARER/, /OR ORDER/], weak: [/\bIFSC\b/, /A\/C/, /RUPEES/, /\bPAY\b/], bank: true },
+    { key: 'passbook', label: 'Passbook', strong: [/PASS\s?BOOK/], weak: [/\bCIF\b/, /\bIFSC\b/, /BALANCE/], bank: true },
+    { key: 'statement', label: 'Bank Statement', strong: [/STATEMENT OF ACCOUNT\b/, /ACCOUNT STATEMENT\b/, /BANK STATEMENT\b/], weak: [/OPENING BALANCE/, /CLOSING BALANCE/, /WITHDRAWAL/, /NARRATION|PARTICULARS/, /\bIFSC\b/], bank: true, recurring: 'range' },
+    { key: 'electricity', label: 'Electricity Bill', strong: [/ELECTRICITY BILL/, /ENERGY BILL/, /\bAPDCL\b/, /POWER DISTRIBUTION/], weak: [/UNITS/, /CONSUMER (NO|NUMBER|ID)/, /METER/, /\bKWH\b/, /TARIFF/], recurring: 'month' },
+    { key: 'gas', label: 'Gas Connection', strong: [/GAS CONNECTION/, /\bINDANE\b/, /BHARAT ?GAS/, /\bHP ?GAS\b/, /SUBSCRIPTION VOUCHER/], weak: [/\bLPG\b/, /CYLINDER/, /CONSUMER NO/] },
+    { key: 'phonebill', label: 'Phone Bill', strong: [/(JIO|AIRTEL|BSNL|VODAFONE|\bVI\b).{0,40}BILL/, /POSTPAID BILL/, /TELEPHONE BILL/], weak: [/MOBILE (NO|NUMBER)/, /PLAN/, /DATA/], recurring: 'month', operator: true },
+    { key: 'recharge', label: 'Recharge', strong: [/RECHARGE/, /PREPAID PLAN/], need: /JIO|AIRTEL|BSNL|VODAFONE|\bVI\b|MOBILE|PREPAID|DTH|TATA PLAY|DISH ?TV/, weak: [/VALIDITY/, /\bPLAN\b/, /\bDATA\b/, /TRANSACTION (ID|NO)|ORDER ID/, /MOBILE (NO|NUMBER)/, /SUCCESSFUL/], recurring: 'month', operator: true },
+    { key: 'saledeed', label: 'Sale Deed', strong: [/SALE DEED/, /DEED OF SALE/, /CONVEYANCE DEED/], weak: [/VENDOR/, /PURCHASER|VENDEE/, /SCHEDULE OF (THE )?PROPERTY/] },
+    { key: 'giftdeed', label: 'Gift Deed', strong: [/GIFT DEED/, /DEED OF GIFT/], weak: [/DONOR/, /DONEE/] },
+    { key: 'jamabandi', label: 'Jamabandi', strong: [/JAMABANDI/], weak: [/\bDAG\b/, /PATTA/] },
+    { key: 'mutation', label: 'Land Mutation', strong: [/MUTATION/], need: /LAND|\bDAG\b|PATTA/, weak: [/\bDAG\b/, /PATTA/, /CIRCLE OFFICER/] },
+    { key: 'patta', label: 'Land Patta', strong: [/\bPATTA\b/, /\bDAG\s?NO/], weak: [/BIGHA|KATHA|LESSA/, /REVENUE/, /CIRCLE/] },
+    { key: 'proptax', label: 'Property Tax Receipt', strong: [/HOLDING TAX/, /PROPERTY TAX/], weak: [/MUNICIPAL/, /HOLDING NO/] },
+    { key: 'rent', label: 'Rent Agreement', strong: [/RENT AGREEMENT/, /LEASE AGREEMENT/, /LEASE DEED/, /LEAVE AND LICEN/, /TENANCY AGREEMENT/], weak: [/LESSOR|LANDLORD/, /LESSEE|TENANT/, /MONTHLY RENT/], expires: true },
+    { key: 'will', label: 'Will', strong: [/LAST WILL/, /WILL AND TESTAMENT/], weak: [/EXECUTOR/, /BEQUEATH/] },
+    { key: 'poa', label: 'Power of Attorney', strong: [/POWER OF ATTORNEY/] },
+    { key: 'affidavit', label: 'Affidavit', strong: [/AFFIDAVIT/], weak: [/DEPONENT/, /SOLEMNLY/, /NOTARY/] },
+    { key: 'warranty', label: 'Warranty Card', strong: [/WARRANTY CARD/, /WARRANTY CERTIFICATE/, /GUARANTEE CARD/], weak: [/WARRANTY/, /SERIAL NO/, /MODEL/], expires: true },
+    { key: 'freight', label: 'Freight Bill', strong: [/FREIGHT BILL/, /FREIGHT INVOICE/, /FREIGHT MEMO/, /TRANSPORT(ATION)? BILL/, /BILL FOR FREIGHT/], weak: [/CONSIGNOR/, /CONSIGNEE/, /LORRY|TRUCK|VEHICLE NO/, /ROADWAYS|CARRIERS?|TRANSPORT|LOGISTICS|CARGO/, /\bL\.?\s?R\.?\s?NO|\bG\.?\s?R\.?\s?NO/], noPerson: true, extra: sellerAndDate, recurring: 'date' },
+    { key: 'invoice', label: 'Invoice', strong: [/TAX INVOICE/, /BILL OF SUPPLY/, /INVOICE (NO|NUMBER)/, /CASH MEMO/, /RETAIL INVOICE/], weak: [/\bGSTIN\b/, /\bHSN\b/, /\bCGST\b|\bSGST\b|\bIGST\b/, /\bQTY\b|QUANTITY/, /\bRATE\b/, /GRAND TOTAL|TOTAL AMOUNT/], noPerson: true, extra: sellerAndDate, recurring: 'date' },
+    { key: 'lr', label: 'LR', strong: [/LORRY RECEIPT/, /CONSIGNMENT NOTE/, /\bG\.?\s?C\.?\s?NOTE/, /GOODS RECEIPT NOTE/], weak: [/CONSIGNOR/, /CONSIGNEE/, /\bL\.?\s?R\.?\s?NO|\bG\.?\s?R\.?\s?NO|\bC\.?\s?N\.?\s?NO/, /PACKAGES|PKGS|\bBAGS\b/, /WEIGHT/, /FREIGHT/], noPerson: true, extra: sellerAndDate, recurring: 'date' },
+    { key: 'resume', label: 'Resume', strong: [/CURRICULUM VITAE/, /\bRESUME\b/, /\bBIO-?DATA\b/], weak: [/EDUCATION/, /EXPERIENCE/, /HOBBIES/] },
+    { key: 'appform', label: 'Application Form', strong: [/APPLICATION FORM/], base: 6, bank: true },
+    { key: 'letter', label: 'Letter', strong: [/\bSUBJECT\s*:/, /YOURS (FAITHFULLY|SINCERELY|TRULY)/, /^(TO|DEAR)\b/], base: 10, weak: [/\bDEAR\b/, /\bREGARDS\b/, /\bREF(ERENCE)?\s*(NO)?\s*:/] },
+    { key: 'agreement', label: 'Agreement', strong: [/\bAGREEMENT\b/], base: 6, weak: [/WITNESS/, /PARTY OF THE (FIRST|SECOND) PART/] },
+    { key: 'receipt', label: 'Receipt', strong: [/\bRECEIPT\b/], base: 6, weak: [/RECEIVED (WITH THANKS|FROM)/, /AMOUNT/] },
+    { key: 'certificate', label: 'Certificate', strong: [/\bCERTIFICATE\b/], base: 6, weak: [/THIS IS TO CERTIFY/, /ISSUED/] }
   ];
 
+  function scoreType(t, T, H, nLetters) {
+    if (t.need && !t.need.test(T)) return 0;
+    if (t.maxLen && nLetters > t.maxLen) return 0;
+    const base = t.base || 10;
+    let s = 0, n = 0;
+    for (const re of t.strong || []) {
+      if (!re.test(T)) continue;
+      // a document's own name is usually in its heading; deeper down it may just be mentioned
+      // ("please send your bank statement"), so it counts for less there
+      s += n === 0 ? (re.test(H) ? base + 5 : base - 2) : 4;
+      n++;
+    }
+    if (!n) return 0;
+    let w = 0;
+    for (const re of t.weak || []) if (re.test(T)) w += 3;
+    return s + Math.min(w, 9);
+  }
+  function pickType(T, H, nLetters) {
+    let best = null, bestScore = 0;
+    for (const t of TYPES) {
+      const sc = scoreType(t, T, H, nLetters);
+      if (sc > bestScore) { best = t; bestScore = sc; }
+    }
+    return bestScore >= 8 ? best : null;
+  }
+
+  // Which kind of insurance: count the tell-tale words of each kind; the most wins
+  const INSURERS = [
+    [/STAR HEALTH/, 'Star Health', 'health'], [/CARE HEALTH|RELIGARE/, 'Care Health', 'health'], [/NIVA BUPA|MAX BUPA/, 'Niva Bupa', 'health'],
+    [/MANIPAL\s?CIGNA/, 'ManipalCigna', 'health'], [/ADITYA BIRLA HEALTH/, 'Aditya Birla Health', 'health'],
+    [/LIFE INSURANCE CORPORATION|\bLIC OF INDIA\b/, 'LIC', 'life'], [/SBI LIFE/, 'SBI Life', 'life'], [/HDFC LIFE/, 'HDFC Life', 'life'],
+    [/MAX LIFE|AXIS MAX LIFE/, 'Max Life', 'life'], [/ICICI PRUDENTIAL/, 'ICICI Prudential', 'life'], [/TATA AIA/, 'Tata AIA', 'life'],
+    [/BAJAJ (ALLIANZ )?LIFE/, 'Bajaj Life', 'life'], [/PNB METLIFE/, 'PNB MetLife', 'life'], [/KOTAK LIFE/, 'Kotak Life', 'life'],
+    [/NEW INDIA ASSURANCE/, 'New India Assurance'], [/NATIONAL INSURANCE/, 'National Insurance'], [/UNITED INDIA/, 'United India'],
+    [/ORIENTAL INSURANCE/, 'Oriental Insurance'], [/ICICI LOMBARD/, 'ICICI Lombard'], [/HDFC ERGO/, 'HDFC Ergo'],
+    [/BAJAJ (ALLIANZ )?GENERAL|BAJAJ ALLIANZ/, 'Bajaj Allianz'], [/TATA AIG/, 'Tata AIG'], [/SBI GENERAL/, 'SBI General'],
+    [/RELIANCE GENERAL/, 'Reliance General'], [/\bGO DIGIT\b|DIGIT INSURANCE/, 'Digit'], [/\bACKO\b/, 'Acko'],
+    [/IFFCO.?TOKIO/, 'IFFCO Tokio'], [/CHOLAMANDALAM|CHOLA MS/, 'Chola MS'], [/ROYAL SUNDARAM/, 'Royal Sundaram'],
+    [/FUTURE GENERALI/, 'Future Generali'], [/UNIVERSAL SOMPO/, 'Universal Sompo'], [/KOTAK (MAHINDRA )?GENERAL/, 'Kotak General']
+  ];
+  const INS_KIND = {
+    health: [/HEALTH/, /MEDICLAIM/, /HOSPITALI[SZ]ATION/, /FAMILY FLOATER/, /CASHLESS/, /\bTPA\b/, /PRE-?EXISTING/, /ROOM RENT/, /DAY CARE/, /CRITICAL ILLNESS/, /AYUSH/, /CO-?PAY/],
+    motor: [/\bMOTOR\b/, /PRIVATE CAR/, /TWO WHEELER/, /GOODS CARRYING/, /COMMERCIAL VEHICLE/, /CHASSIS/, /ENGINE (NO|NUMBER)/, /CUBIC CAPACITY|\bCC\b/, /\bIDV\b|INSURED DECLARED VALUE/, /OWN DAMAGE/, /THIRD PARTY/, /NO CLAIM BONUS|\bNCB\b/, /MAKE.{0,10}MODEL/],
+    life: [/LIFE (INSURANCE|ASSURANCE)/, /JEEVAN/, /SUM ASSURED/, /MATURITY/, /DEATH BENEFIT/, /TERM (PLAN|INSURANCE)/, /ENDOWMENT/, /\bULIP\b/, /SURRENDER/, /LIFE ASSURED/],
+    property: [/\bFIRE\b/, /BURGLARY/, /SHOPKEEPER/, /STOCK/, /BUILDING/, /HOUSEHOLDER/, /STANDARD FIRE/, /SPECIAL PERILS/]
+  };
   function insuranceKind(T) {
-    if (/MOTOR|VEHICLE|CHASSIS|TWO WHEELER|PRIVATE CAR|GOODS CARRYING|REGISTRATION (NO|MARK|NUMBER)/.test(T)) return { label: 'Vehicle Insurance', vehicle: true };
-    if (/HEALTH|MEDICLAIM|HOSPITALI[SZ]ATION|FAMILY FLOATER/.test(T)) return { label: 'Health Insurance' };
-    if (/\bLIFE\b|\bLIC\b|JEEVAN|TERM PLAN/.test(T)) return { label: 'Life Insurance' };
-    if (/FIRE|BURGLARY|SHOP|STOCK|PROPERTY/.test(T)) return { label: 'Shop Insurance' };
-    return { label: 'Insurance Policy' };
+    const score = { health: 0, motor: 0, life: 0, property: 0 };
+    for (const k in INS_KIND) for (const re of INS_KIND[k]) if (re.test(T)) score[k] += 2;
+    let insurer = '';
+    for (const [re, name, kind] of INSURERS) if (re.test(T)) { insurer = name; if (kind) score[kind] += 6; break; }
+    if (score.motor && vehicleNo(T)) score.motor += 2;
+    const [kind, sc] = Object.entries(score).sort((a, b) => b[1] - a[1])[0];
+    const label = sc < 4 ? 'Insurance Policy' : { health: 'Health Insurance', motor: 'Vehicle Insurance', life: 'Life Insurance', property: 'Shop Insurance' }[kind];
+    return { label, vehicle: label === 'Vehicle Insurance', insurer };
+  }
+
+  // Invoices: name them by the seller and the bill date, e.g. "Ramesh Traders Invoice 12 Aug 2025"
+  function sellerAndDate(T, lines) {
+    let seller = '';
+    for (const l of (lines || []).slice(0, 6)) {
+      if (/INVOICE|ORIGINAL|DUPLICATE|TRIPLICATE|COPY|\bGST|\bTAX\b|\bBILL\b|CASH MEMO|PAGE|ESTIMATE|\d{4,}|@|WWW|\.COM/.test(l)) continue;
+      const w = l.replace(/[^A-Z&.' ]/g, ' ').replace(/\s+/g, ' ').trim();
+      const words = w.split(' ').filter(x => x.length > 1);
+      if (words.length >= 1 && words.length <= 6 && letters(w) >= 4 && letters(w) / Math.max(1, l.length) > 0.6) { seller = titleCase(w); break; }
+    }
+    return { seller };
   }
 
   // file names like "diansh birth cert.jpg" also count as a hint
@@ -182,6 +258,21 @@
         m = T.match(/POLICY\s*(?:NO|NUMBER|NUM)\.?\s*[:\-]?\s*([A-Z0-9][A-Z0-9\/\-]{5,29})/);
         return m ? m[1] : '';
       case 'udyam': m = T.match(/\b(UDYAM-[A-Z]{2}-\d{2}-\d{7})\b/); return m ? m[1] : '';
+      case 'premium':
+        m = T.match(/POLICY\s*(?:NO|NUMBER|NUM)\.?\s*[:\-]?\s*([A-Z0-9][A-Z0-9\/\-]{5,29})/);
+        return m ? m[1] : '';
+      case 'electricity':
+        m = T.match(/CONSUMER\s*(?:NO|NUMBER|ID|A\/C)\.?\s*[:\-]?\s*([A-Z0-9][A-Z0-9\/\-]{4,19})/);
+        return m ? m[1] : '';
+      case 'recharge': case 'phonebill':
+        m = T.match(/(?:MOBILE|PHONE|NUMBER|MSISDN|RECHARGED?\s*(?:FOR|ON)|SERVICE)\D{0,20}?(?:\+?91[\s\-]?)?([6-9]\d{4})\s?(\d{5})\b/) || T.match(/\b([6-9]\d{4})\s?(\d{5})\b/);
+        return m ? m[1] + m[2] : '';
+      case 'invoice': case 'freight':
+        m = T.match(/\b(\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z])\b/);
+        return m ? m[1] : '';
+      case 'lr':
+        m = T.match(/(?:\bG\.?\s?C\.?\s?NOTE|\bL\.?\s?R\.?|\bG\.?\s?R\.?|\bC\.?\s?N\.?|CONSIGNMENT NOTE|LORRY RECEIPT)\s*(?:NO|NUMBER)\.?\s*[:\-]?\s*([A-Z0-9][A-Z0-9\/\-]{1,15})/);
+        return m ? m[1] : '';
       default: return '';
     }
   }
@@ -203,6 +294,43 @@
     while ((m = r2.exec(T))) { const iso = isoDate(+m[3], MON[m[2]], +m[1]); if (iso) out.push({ iso, at: m.index }); }
     return out;
   }
+  // The date a recurring document belongs to: the bill month, the receipt date, the statement period
+  const MONTHS = 'JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC';
+  const MON_NAME = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const fmtMonth = iso => MON_NAME[+iso.slice(5, 7) - 1] + ' ' + iso.slice(0, 4);
+  const fmtDay = iso => (+iso.slice(8, 10)) + ' ' + fmtMonth(iso);
+  function docDateFor(kind, T) {
+    if (!kind) return null;
+    if (kind === 'range') {
+      const m = T.match(/(?:PERIOD|FROM|STATEMENT FOR)\D{0,25}?(\d{1,2}[\/\-.](?:\d{1,2}|[A-Z]{3})[\/\-.](?:19|20)\d{2})\s*(?:TO|-|–|TILL)\s*(\d{1,2}[\/\-.](?:\d{1,2}|[A-Z]{3})[\/\-.](?:19|20)\d{2})/);
+      if (m) {
+        const a = findDates(m[1].replace(/[\-.]/g, '/'))[0] || findDates(m[1])[0], b = findDates(m[2].replace(/[\-.]/g, '/'))[0] || findDates(m[2])[0];
+        if (a && b) return { iso: a.iso, label: fmtMonth(a.iso) === fmtMonth(b.iso) ? fmtMonth(a.iso) : fmtMonth(a.iso) + ' - ' + fmtMonth(b.iso) };
+      }
+      return null;
+    }
+    if (kind === 'month') {
+      const m = T.match(new RegExp('(?:BILL(?:ING)?|FOR THE|SALARY|PAY ?SLIP|STATEMENT)\\s*(?:MONTH|PERIOD)?\\s*(?:OF|FOR)?\\s*(?:THE MONTH OF)?\\s*[:\\-]?\\s*(' + MONTHS + ')[A-Z]*[\\s\\-\\/,\']*((?:19|20)?\\d{2})\\b'));
+      if (m) {
+        const y = m[2].length === 2 ? 2000 + +m[2] : +m[2];
+        const iso = isoDate(y, MON[m[1]], 1);
+        if (iso) return { iso, label: fmtMonth(iso) };
+      }
+    }
+    // a date written next to "date" (bill date, receipt date, transaction date …)
+    const d = T.match(new RegExp('(?:BILL|INVOICE|RECEIPT|TRANSACTION|RECHARGE|PAYMENT|ISSUE|LR|DOC(?:UMENT)?)?\\s*DATE[D]?\\s*(?:OF\\s*(?:ISSUE|RECEIPT|PAYMENT|BILL|INVOICE))?\\s*[:\\-]?\\s*(\\d{1,2}[\\/\\-.]\\d{1,2}[\\/\\-.](?:19|20)\\d{2}|\\d{1,2}(?:ST|ND|RD|TH)?[\\s\\-]?(?:' + MONTHS + ')[A-Z]*[\\s\\-,]*(?:19|20)\\d{2})'));
+    let f = d ? findDates(d[1])[0] : null;
+    if (!f) {
+      // otherwise the first date that is not a birth, maturity, expiry or due date, and is not in the future
+      const soon = new Date(Date.now() + 31 * 86400000).toISOString().slice(0, 10);
+      f = findDates(T).find(x => x.iso <= soon && !/(BIRTH|DOB|MATURITY|EXPIR|VALID|DUE|COMMENCEMENT|RISK)[^0-9]{0,25}$/.test(T.slice(Math.max(0, x.at - 30), x.at)));
+    }
+    if (!f) return null;
+    return { iso: f.iso, label: kind === 'month' ? fmtMonth(f.iso) : fmtDay(f.iso) };
+  }
+  const OPERATORS = [[/\bJIO\b/, 'Jio'], [/AIRTEL/, 'Airtel'], [/VODAFONE|\bVI\b/, 'Vi'], [/BSNL/, 'BSNL'], [/TATA PLAY|TATA SKY/, 'Tata Play'], [/DISH ?TV/, 'Dish TV']];
+  const operatorOf = T => { for (const [re, n] of OPERATORS) if (re.test(T)) return n; return ''; };
+
   function expiryFrom(T) {
     const dates = findDates(T);
     if (!dates.length) return '';
@@ -341,7 +469,8 @@
     const FT = String(fileName || '').toUpperCase().replace(/[_\-.]+/g, ' ');
     const readable = letters(raw) >= 25;
 
-    let type = readable ? TYPES.find(t => t.test(T)) : null;
+    const H = lines.slice(0, 6).join(' ');
+    let type = readable ? pickType(T, H, letters(raw)) : null;
     let fromFile = false;
     if (!type) {
       const hint = FILE_HINTS.find(([re]) => re.test(FT));
@@ -349,7 +478,8 @@
     }
     let label = type ? type.label : '';
     let vehicle = type && type.vehicle;
-    if (type && type.sub && readable) { const s = type.sub(T); label = s.label; vehicle = vehicle || s.vehicle; }
+    let insurer = '';
+    if (type && type.sub && readable) { const s = type.sub(T); label = s.label; vehicle = vehicle || s.vehicle; insurer = s.insurer || ''; }
 
     const cands = nameCandidates(lines, type && type.key);
     const hit = matchMember(members, lines, cands, fileName);
@@ -358,19 +488,31 @@
     const idNumber = type && readable ? idNumberFor(type.key, T) : '';
     const veh = vehicle && readable ? vehicleNo(T) : '';
     const expiry = type && type.expires && readable ? expiryFrom(T) : '';
-    const extra = type && type.extra && readable ? type.extra(T) : '';
+    let extra = type && type.extra && readable ? type.extra(T, lines) : '';
     const bank = type && type.bank && readable ? bankOf(T) : '';
 
     const person = hit ? hit.member.name : (guessed ? guessed.split(' ')[0] : '');
+    const period = type && type.recurring && readable ? docDateFor(type.recurring, T) : null;
+    const operator = type && type.operator && readable ? operatorOf(T) : '';
     let title = '';
-    if (label) {
+    if (label && type.noPerson) {
+      // a bill or LR is named after whoever issued it, not the person it was billed to
+      const e = extra || {};
+      let lbl = label;
+      if (type.key === 'invoice' && /ROADWAYS|CARRIER|TRANSPORT|LOGISTIC|CARGO|MOVERS|FREIGHT|TRAVELS/i.test(e.seller || '')) lbl = 'Freight Bill';
+      title = [e.seller, lbl, type.key === 'lr' && idNumber ? idNumber : '', period && period.label].filter(Boolean).join(' ');
+      label = lbl; extra = '';
+    } else if (label) {
       const parts = [person];
       if (bank) parts.push(bank);
+      if (insurer && !vehicle) parts.push(insurer);
+      if (operator) parts.push(operator);
       if (extra && !type.extraAfter) parts.push(extra);
-      parts.push(label);
+      parts.push(insurer ? label.replace(/ Policy$/, '') : label);
       if (extra && type.extraAfter) parts.push(extra);
       if (veh) parts.push(veh);
-      title = parts.filter(Boolean).join(' ');
+      if (period) parts.push(period.label);
+      title = parts.filter(Boolean).join(' ').replace(/\b(\w+) \1\b/gi, '$1');   // "Star Health Health Insurance" → "Star Health Insurance"
     } else {
       const fn = cleanFileName(fileName);
       if (fn) title = person && !fn.toUpperCase().includes(person.toUpperCase()) ? person + ' ' + fn : fn;
@@ -387,6 +529,9 @@
       guessedName: guessed,             // a name found on the document that is not in your family list yet
       idNumber: idNumber || (veh && type && type.key === 'insurance' ? veh : '') || '',
       expiry,
+      docDate: period ? period.iso : '',       // which bill month / receipt date this copy is for
+      periodLabel: period ? period.label : '',
+      recurring: !!(type && type.recurring),   // a document that comes again and again (bills, receipts)
       readable
     };
   }
@@ -402,9 +547,11 @@
   }
 
   const DOC_TYPES = [...new Set(TYPES.map(t => t.label).concat(['Vehicle Insurance', 'Health Insurance', 'Life Insurance', 'Shop Insurance', 'Insurance Policy', 'Photo', 'Other']))]
-    .filter(l => l !== 'Insurance').sort();
+    .filter(l => !['Insurance', 'Certificate'].includes(l)).sort();
 
-  const api = { analyse, similarity, cleanFileName, titleCase, DOC_TYPES, _internal: { nameCandidates, expiryFrom, idNumberFor, vehicleNo, classOf } };
+  // kinds that come again and again — for these, two copies are only duplicates if they are for the same date
+  const RECURRING_TYPES = TYPES.filter(t => t.recurring).map(t => t.label).concat(['Freight Bill']);
+  const api = { analyse, similarity, cleanFileName, titleCase, DOC_TYPES, RECURRING_TYPES, _internal: { nameCandidates, expiryFrom, idNumberFor, vehicleNo, classOf } };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.FVDetect = api;
 })(typeof window !== 'undefined' ? window : globalThis);
